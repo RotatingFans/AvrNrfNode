@@ -1,64 +1,30 @@
 /*
- * nrf24.Op
- *
- * Created: 11/12/2016 10:42:14 PM
- *  Author: Patrick
- */ 
- #include "nrf24.h"
+* ----------------------------------------------------------------------------
+* “THE COFFEEWARE LICENSE” (Revision 1):
+* <ihsan@kehribar.me> wrote this file. As long as you retain this notice you
+* can do whatever you want with this stuff. If we meet some day, and you think
+* this stuff is worth it, you can buy me a coffee in return.
+* -----------------------------------------------------------------------------
+* This library is based on this library:
+*   https://github.com/aaronds/arduino-nrf24l01
+* Which is based on this library:
+*   http://www.tinkerer.eu/AVRLib/nRF24L01
+* -----------------------------------------------------------------------------
+*/
+#include "nrf24.h"
 
- //#include "SPI/tinySPI.h"
 uint8_t payload_len;
 
 /* init the hardware pins */
-void nrf24_init(uint8_t channel, uint8_t pay_length, uint8_t * rxAdr, uint8_t * txAdr)
+void nrf24_init()
 {
 	nrf24_setupPins();
-	//SPIbegin();
 	nrf24_ce_digitalWrite(LOW);
 	nrf24_csn_digitalWrite(HIGH);
-
-
-	/* Use static payload length ... */
-	payload_len = pay_length;
-
-	// Set RF channel
-	nrf24_configRegister(RF_CH,channel);
-
-	// Set length of incoming payload
-	nrf24_configRegister(RX_PW_P0, 0x00); // Auto-ACK pipe ...
-	nrf24_configRegister(RX_PW_P1, payload_len); // Data payload pipe
-	nrf24_configRegister(RX_PW_P2, 0x00); // Pipe not used
-	nrf24_configRegister(RX_PW_P3, 0x00); // Pipe not used
-	nrf24_configRegister(RX_PW_P4, 0x00); // Pipe not used
-	nrf24_configRegister(RX_PW_P5, 0x00); // Pipe not used
-
-	// 1 Mbps, TX gain: 0dbm
-	nrf24_configRegister(RF_SETUP, (0<<RF_DR)|((0x03)<<RF_PWR));
-
-	// CRC enable, 1 byte CRC length
-	nrf24_configRegister(CONFIG,nrf24_CONFIG);
-
-	// Auto Acknowledgment
-	nrf24_configRegister(EN_AA,(1<<ENAA_P0)|(1<<ENAA_P1)|(0<<ENAA_P2)|(0<<ENAA_P3)|(0<<ENAA_P4)|(0<<ENAA_P5));
-
-	// Enable RX addresses
-	nrf24_configRegister(EN_RXADDR,(1<<ERX_P0)|(1<<ERX_P1)|(0<<ERX_P2)|(0<<ERX_P3)|(0<<ERX_P4)|(0<<ERX_P5));
-
-	// Auto retransmit delay: 1000 us and Up to 15 retransmit trials
-	nrf24_configRegister(SETUP_RETR,(0x0F<<ARD)|(0x0F<<ARC));
-
-	// Dynamic length configurations: No dynamic length
-	nrf24_configRegister(DYNPD,(0<<DPL_P0)|(0<<DPL_P1)|(0<<DPL_P2)|(0<<DPL_P3)|(0<<DPL_P4)|(0<<DPL_P5));
-			nrf24_writeRegister(RX_ADDR_P0,txAdr,nrf24_ADDR_LEN);
-			nrf24_writeRegister(TX_ADDR,txAdr,nrf24_ADDR_LEN);
-	nrf24_ce_digitalWrite(LOW);
-	nrf24_writeRegister(RX_ADDR_P1,rxAdr,nrf24_ADDR_LEN);
-	nrf24_ce_digitalWrite(HIGH);	// Start listening
-	nrf24_powerUpRx();
 }
 
 /* configure the module */
-void nrf24_config(uint8_t channel, uint8_t pay_length, uint8_t * rxAdr, uint8_t * txAdr)
+void nrf24_config(uint8_t channel, uint8_t pay_length)
 {
 	/* Use static payload length ... */
 	payload_len = pay_length;
@@ -149,20 +115,27 @@ uint8_t nrf24_rxFifoEmpty()
 uint8_t nrf24_payloadLength()
 {
 	uint8_t status;
-	nrf24_transferSyncReg(status,R_RX_PL_WID,0x00,1);
-
+	nrf24_csn_digitalWrite(LOW);
+	spi_transfer(R_RX_PL_WID);
+	status = spi_transfer(0x00);
+	nrf24_csn_digitalWrite(HIGH);
 	return status;
 }
 
 /* Reads payload bytes into data array */
 void nrf24_getData(uint8_t* data)
 {
+	/* Pull down chip select */
+	nrf24_csn_digitalWrite(LOW);
 
+	/* Send cmd to read rx payload */
+	spi_transfer( R_RX_PAYLOAD );
 	
 	/* Read payload */
-	nrf24_transferSyncReg(data,R_RX_PAYLOAD,data,payload_len);
+	nrf24_transferSync(data,data,payload_len);
 	
 	/* Pull up chip select */
+	nrf24_csn_digitalWrite(HIGH);
 
 	/* Reset status register */
 	nrf24_configRegister(STATUS,(1<<RX_DR));
@@ -189,22 +162,30 @@ void nrf24_send(uint8_t* value)
 
 	/* Do we really need to flush TX fifo each time ? */
 	#if 1
-		SpiTransferCsn(FLUSH_TX);
+	/* Pull down chip select */
+	nrf24_csn_digitalWrite(LOW);
+
+	/* Write cmd to flush transmit FIFO */
+	spi_transfer(FLUSH_TX);
+
+	/* Pull up chip select */
+	nrf24_csn_digitalWrite(HIGH);
 	#endif
 
 	/* Pull down chip select */
+	nrf24_csn_digitalWrite(LOW);
 
+	/* Write cmd to write payload */
+	spi_transfer(W_TX_PAYLOAD);
 
 	/* Write payload */
-	nrf24_transferSyncReg(value,W_TX_PAYLOAD,value,payload_len);
+	nrf24_transmitSync(value,payload_len);
 
 	/* Pull up chip select */
+	nrf24_csn_digitalWrite(HIGH);
 
 	/* Start the transmission */
 	nrf24_ce_digitalWrite(HIGH);
-
-		while(nrf24_isSending());
-
 }
 
 uint8_t nrf24_isSending()
@@ -226,7 +207,11 @@ uint8_t nrf24_isSending()
 
 uint8_t nrf24_getStatus()
 {
-	return SpiTransferCsn(NOP);
+	uint8_t rv;
+	nrf24_csn_digitalWrite(LOW);
+	rv = spi_transfer(NOP);
+	nrf24_csn_digitalWrite(HIGH);
+	return rv;
 }
 
 uint8_t nrf24_lastMessageStatus()
@@ -255,7 +240,9 @@ uint8_t nrf24_lastMessageStatus()
 
 void nrf24_powerUpRx()
 {
-	SpiTransferCsn(FLUSH_RX);
+	nrf24_csn_digitalWrite(LOW);
+	spi_transfer(FLUSH_RX);
+	nrf24_csn_digitalWrite(HIGH);
 
 	nrf24_configRegister(STATUS,(1<<RX_DR)|(1<<TX_DS)|(1<<MAX_RT));
 
@@ -278,7 +265,7 @@ void nrf24_powerDown()
 }
 
 /* software spi routine */
-static uint8_t SPItransfer(uint8_t tx)
+uint8_t spi_transfer(uint8_t tx)
 {
 	uint8_t i = 0;
 	uint8_t rx = 0;
@@ -313,53 +300,35 @@ static uint8_t SPItransfer(uint8_t tx)
 }
 
 /* send and receive multiple bytes over SPI */
-static void nrf24_transferSync(uint8_t* dataout,uint8_t* datain,uint8_t len)
+void nrf24_transferSync(uint8_t* dataout,uint8_t* datain,uint8_t len)
 {
 	uint8_t i;
-	nrf24_csn_digitalWrite(LOW);
 
 	for(i=0;i<len;i++)
 	{
-		datain[i] = SPItransfer(dataout[i]);
+		datain[i] = spi_transfer(dataout[i]);
 	}
-	nrf24_csn_digitalWrite(HIGH);
 
 }
-static void nrf24_transferSyncReg(uint8_t* dataout,uint8_t reg, uint8_t* datain, uint8_t len)
-{
-	nrf24_csn_digitalWrite(LOW);
-	SPItransfer(reg);
-	for(uint8_t i=0;i<len;i++)
-	{
-		datain[i] = SPItransfer(dataout[i]);
-	}
-	nrf24_csn_digitalWrite(HIGH);
 
-}
 /* send multiple bytes over SPI */
-static void nrf24_transmitSync(uint8_t* dataout,uint8_t len)
+void nrf24_transmitSync(uint8_t* dataout,uint8_t len)
 {
 	uint8_t i;
 	
 	for(i=0;i<len;i++)
 	{
-		SPItransfer(dataout[i]);
+		spi_transfer(dataout[i]);
 	}
 
 }
-static uint8_t SpiTransferCsn(uint8_t data) {
-	uint8_t rv;
-	nrf24_csn_digitalWrite(LOW);
-	rv = SPItransfer(data);
-		nrf24_csn_digitalWrite(HIGH);
-		return rv;
-}
 
+/* Clocks only one byte into the given nrf24 register */
 void nrf24_configRegister(uint8_t reg, uint8_t value)
 {
 	nrf24_csn_digitalWrite(LOW);
-	SPItransfer(W_REGISTER | (REGISTER_MASK & reg));
-	SPItransfer(value);
+	spi_transfer(W_REGISTER | (REGISTER_MASK & reg));
+	spi_transfer(value);
 	nrf24_csn_digitalWrite(HIGH);
 }
 
@@ -367,7 +336,7 @@ void nrf24_configRegister(uint8_t reg, uint8_t value)
 void nrf24_readRegister(uint8_t reg, uint8_t* value, uint8_t len)
 {
 	nrf24_csn_digitalWrite(LOW);
-	SPItransfer(R_REGISTER | (REGISTER_MASK & reg));
+	spi_transfer(R_REGISTER | (REGISTER_MASK & reg));
 	nrf24_transferSync(value,value,len);
 	nrf24_csn_digitalWrite(HIGH);
 }
@@ -376,35 +345,7 @@ void nrf24_readRegister(uint8_t reg, uint8_t* value, uint8_t len)
 void nrf24_writeRegister(uint8_t reg, uint8_t* value, uint8_t len)
 {
 	nrf24_csn_digitalWrite(LOW);
-	SPItransfer(W_REGISTER | (REGISTER_MASK & reg));
+	spi_transfer(W_REGISTER | (REGISTER_MASK & reg));
 	nrf24_transmitSync(value,len);
 	nrf24_csn_digitalWrite(HIGH);
 }
-
-
-/* Clocks only one byte into the given nrf24 register */
-//static void nrf24_configRegister(uint8_t reg, uint8_t value)
-//{
-  //nrf24_opRegister(reg,value,1,W_REGISTER);
-//
-//}
-//
-///* Read single register from nrf24 */
-//static void nrf24_opRegister(uint8_t reg, uint8_t* value, uint8_t len, uint8_t rw)
-//{uint8_t val[len];
-	//if (len == 1) {	val[0] = value;
-	//} else {
-	//*val = value;
-	//}
-	//uint8_t retur;
-	//nrf24_transferSyncReg(value,rw | (REGISTER_MASK & reg),retur, len);
-//}
-//static void nrf24_readRegister(uint8_t reg, uint8_t* value, uint8_t len)
-//{
-  //nrf24_opRegister(reg,value,len,R_REGISTER);
-//}
-///* Write to a single register of nrf24 */
-//static void nrf24_writeRegister(uint8_t reg, uint8_t* value, uint8_t len)
-//{
- //nrf24_opRegister(reg,value,len,W_REGISTER);
-//}

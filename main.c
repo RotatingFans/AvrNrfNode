@@ -14,7 +14,7 @@ Licensed under GPLv3
 #include <avr/interrupt.h>
 #define ECB 0
 #define MULTIPLY_AS_A_FUNCTION 1
-#include "./AESCBC/aes.h"
+#include "./XTEA/xtea.h"
 
 //#include <stdint.h>
 #include "./nrf24.h"
@@ -75,10 +75,12 @@ uint8_t EEMEM paired = 0;
 uint8_t EEMEM encryptionKey[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
 uint8_t EEMEM rxAddr[5] = {0xE7,0xE7,0xE7,0xE7,0xE6};
 uint8_t EEMEM txAddr[5] = {0xE7,0xE7,0xE7,0xE7,0xE7};
-char currentIv[16] ={};
+char currentIv[16] ={ 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 char nextIv[16] = {};
-static void sendData(uint8_t *keyVal, char *id);
+static void sendData(char *id);
 volatile uint8_t seconds;
+	uint8_t sleepIterations = 0;
+
 /* ------------------------------------------------------------------------- */
 ISR(WDT_vect)
 {
@@ -90,7 +92,7 @@ ISR(TIMER1_COMPA_vect)
 {
 	++seconds;
 }
-uint16_t TEMPERATURE_TABLE_READ(uint8_t i) {pgm_read_byte(&termo_table[i]);}
+uint16_t TEMPERATURE_TABLE_READ(uint8_t i) {return pgm_read_byte(&termo_table[i]);}
 void sleep()
 {
 	// Set sleep to full power down.  Only external interrupts or
@@ -127,14 +129,43 @@ int main()
 	uint8_t keyVal[16];
 	uint8_t rxAdr[5];
 	uint8_t txAdr[5];
-	uint8_t pairedVal;
-	uint8_t sleepIterations = 0;
+	uint8_t pairedVal = 0;
+		cli();
+		
+		// Set the watchdog reset bit in the MCU status register to 0.
+		MCUSR &= ~(1<<WDRF);
+		
+		// Set WDCE and WDE bits in the watchdog control register.
+		WDTCSR |= (1<<WDCE) | (1<<WDE);
 
+		// Set watchdog clock prescaler bits to a value of 8 seconds.
+		WDTCSR = (1<<WDP0) | (1<<WDP3);
+		
+		 //Enable watchdog as interrupt only (no reset).
+		WDTCSR |= (1<<WDIE);
+		TCCR1A = 0;     // set entire TCCR1A register to 0
+		TCCR1B = 0;     // same for TCCR1B
+		
+		 //set compare match register to desired timer count:
+		OCR1A = 15624;
+		// turn on CTC mode:
+		TCCR1B |= (1 << WGM12);
+		// Set CS10 and CS12 bits for 1024 prescaler:
+		TCCR1B |= (1 << CS10);
+		TCCR1B |= (1 << CS12);
+		// enable timer compare interrupt:
+		TIMSK1 |= (1 << OCIE1A);
+		 //Enable interrupts again.
+		sei();
 	/* init hardware pins */
-		eeprom_read_block(txAddr,txAddr,5);
+		eeprom_read_block(&txAdr,&txAddr,5);
 
-		eeprom_read_block(rxAddr,rxAddr,5);
-	nrf24_init(2,16,rxAdr,txAddr);
+		eeprom_read_block(&rxAdr,&rxAddr,5);
+		nrf24_init(2,32,rxAdr,txAdr);
+
+	        nrf24_powerUpRx();
+
+//	nrf24_send("test5678901234567890123456789012");
 	
 	/* Channel #2 , payload length: 32 */
 
@@ -149,15 +180,15 @@ int main()
 
 
 
-	DDRB = 0xFF;
-	pairedVal = eeprom_read_byte(paired);
+	DDRB |= (1<<5);
+	//pairedVal = eeprom_read_byte(&paired);
 	if (pairedVal) {	
 		pingHost();
 	}
 	else {
-		pair();
+		//pair();
 	}
-	eeprom_read_block((void*)&keyVal, (const void*)&encryptionKey, 16);
+	//eeprom_read_block((void*)&keyVal, (const void*)&encryptionKey, 16);
 	//aes128_init(keyVal,&ctx);
 	//aes128_enc(data,&ctx);
 	// Setup the watchdog timer to run an interrupt which
@@ -169,37 +200,12 @@ int main()
 	// This next section of code is timing critical, so interrupts are disabled.
 	// See more details of how to change the watchdog in the ATmega328P datasheet
 	// around page 50, Watchdog Timer.
-	cli();
-	
-	// Set the watchdog reset bit in the MCU status register to 0.
-	MCUSR &= ~(1<<WDRF);
-	
-	// Set WDCE and WDE bits in the watchdog control register.
-	WDTCSR |= (1<<WDCE) | (1<<WDE);
 
-	// Set watchdog clock prescaler bits to a value of 8 seconds.
-	WDTCSR = (1<<WDP0) | (1<<WDP3);
-	
-	// Enable watchdog as interrupt only (no reset).
-	WDTCSR |= (1<<WDIE);
-	TCCR1A = 0;     // set entire TCCR1A register to 0
-	TCCR1B = 0;     // same for TCCR1B
-	
-	// set compare match register to desired timer count:
-	OCR1A = 15624;
-	// turn on CTC mode:
-	TCCR1B |= (1 << WGM12);
-	// Set CS10 and CS12 bits for 1024 prescaler:
-	TCCR1B |= (1 << CS10);
-	TCCR1B |= (1 << CS12);
-	// enable timer compare interrupt:
-	TIMSK1 |= (1 << OCIE1A);
-	// Enable interrupts again.
-	sei();
+			//	PORTB = (1<<5);
 
 
 
-	for(;;)	{
+while (1) {
 		if (watchdogActivated)
 		{
 			watchdogActivated = 0;
@@ -207,32 +213,40 @@ int main()
 			// Increase the count of sleep iterations and take a sensor
 			// reading once the max number of iterations has been hit.
 			if (++sleepIterations >= MAX_SLEEP_ITERATIONS) {
+			//				PORTB = (1<<5);
+
 				// Reset the number of sleep iterations.
 				sleepIterations = 0;
 				// Log the sensor data (waking the CC3000, etc. as needed)
-				sendData(keyVal, (char) {1,0,0});
+				char id[3] = {1,1,1};
+				sendData(id);
 			}
 		}
 		
 		// Go to sleep!
-		sleep();
+				sleep();
 		
 	}
 }
-static void sendData(uint8_t *keyVal, char *id) {
+static void sendData(char* id) {
 
-	char Payload[16] = "";
-	char tempstr[6] = "";
+	char Payload[32] = "";
+	char tempstr[29] = "";
+		char tempstrE[29] = "";
+			uint8_t keyVal[16] =  {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+
+		//	eeprom_read_block((void*)&keyVal, (const void*)&encryptionKey, 16);
 	int16_t tempC = 0;
 	uint16_t summ = 0;
-	PORTB = (1<<0);
+	PORTB = (1<<5);
 	uint8_t i = 32;
 	// select the corresponding channel 0~7
 	// ANDing with ’7′ will always keep the value
 	// of ‘ch’ between 0 and 7
 	// AND operation with 7
-	ADMUX = (ADMUX & 0xF8)|1; // clears the bottom 3 bits before ORing
+
 	do {
+		ADMUX = (ADMUX & 0xF8)|1; // clears the bottom 3 bits before ORing
 
 		ADCSRA |= _BV(ADSC);
 		while(ADCSRA & (1<<ADSC));
@@ -240,17 +254,24 @@ static void sendData(uint8_t *keyVal, char *id) {
 	} while (--i);
 
 
-	PORTB = (0<<0);
+	PORTB = (0<<5);
+
 	tempC = calc_temperature(summ);
 
 	itoa(tempC,tempstr,10);
-	AES128_CBC_encrypt_buffer(tempstr,tempstr,6,keyVal,currentIv);
+		strcat(tempstr, currentIv);
+
+	xtea_enc(tempstrE,tempstr,keyVal);
 	strcat(Payload, id);
-	strcat(Payload,tempstr);
+	strcat(Payload,tempstrE);
+	
 
 
 	/* Automatically goes to TX mode */
 	nrf24_send(Payload);
+
+	//while(nrf24_isSending());
+		//						PORTB = (0<<5);
 
 	/* Wait for transmission to end */
 	nrf24_powerUpRx();
@@ -258,7 +279,9 @@ static void sendData(uint8_t *keyVal, char *id) {
 	while (!nrf24_dataReady() && seconds < 2);
 	if (nrf24_dataReady()) {
 		nrf24_getData(Payload);
-		AES128_CBC_decrypt_buffer(Payload,Payload,16,keyVal,currentIv);
+		xtea_dec(Payload,Payload,keyVal);
+		memcpy(currentIv, Payload, 16);
+		memset(&Payload[0], 0, sizeof(Payload));
 		strcat(Payload,id);
 		strcat(Payload, "ACK");
 		nrf24_send(Payload);

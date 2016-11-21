@@ -1,10 +1,4 @@
 /*
- * rf24.op
- *
- * Created: 11/12/2016 10:42:54 PM
- *  Author: Patrick
- */ 
- /*
 * ----------------------------------------------------------------------------
 * “THE COFFEEWARE LICENSE” (Revision 1):
 * <ihsan@kehribar.me> wrote this file. As long as you retain this notice you
@@ -33,10 +27,10 @@
 #define NRF24_MESSAGE_LOST   1
 
 /* adjustment functions */
-void    nrf24_init(uint8_t channel, uint8_t pay_length, uint8_t * rxAdr, uint8_t * txAdr);
+void    nrf24_init();
 void    nrf24_rx_address(uint8_t* adr);
 void    nrf24_tx_address(uint8_t* adr);
-void    nrf24_config(uint8_t channel, uint8_t pay_length, uint8_t * rxAdr, uint8_t * txAdr);
+void    nrf24_config(uint8_t channel, uint8_t pay_length);
 
 /* state check functions */
 uint8_t nrf24_dataReady();
@@ -64,16 +58,13 @@ void    nrf24_powerUpTx();
 void    nrf24_powerDown();
 
 /* low level interface ... */
-static uint8_t spi_transfer(uint8_t tx);
-static void    nrf24_transmitSync(uint8_t* dataout,uint8_t len);
-static void    nrf24_transferSync(uint8_t* dataout,uint8_t* datain,uint8_t len);
-static void nrf24_transferSyncReg(uint8_t* dataout,uint8_t reg, uint8_t* datain, uint8_t len);
+uint8_t spi_transfer(uint8_t tx);
+void    nrf24_transmitSync(uint8_t* dataout,uint8_t len);
+void    nrf24_transferSync(uint8_t* dataout,uint8_t* datain,uint8_t len);
+void    nrf24_configRegister(uint8_t reg, uint8_t value);
+void    nrf24_readRegister(uint8_t reg, uint8_t* value, uint8_t len);
+void    nrf24_writeRegister(uint8_t reg, uint8_t* value, uint8_t len);
 
-static void    nrf24_configRegister(uint8_t reg, uint8_t value);
-static void	   nrf24_opRegister(uint8_t reg, uint8_t* value, uint8_t len, uint8_t rw);
-static void    nrf24_readRegister(uint8_t reg, uint8_t* value, uint8_t len);
-static void    nrf24_writeRegister(uint8_t reg, uint8_t* value, uint8_t len);
-static uint8_t SpiTransferCsn(uint8_t data);
 /* -------------------------------------------------------------------------- */
 /* You should implement the platform spesific functions in your code */
 /* -------------------------------------------------------------------------- */

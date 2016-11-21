@@ -10,5 +10,5 @@ nrf24.c
 
 radioPinFunctions.c
 
-SPI\tinySPI.c
+XTEA\xtea.c
 
